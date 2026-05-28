@@ -1,0 +1,76 @@
+name: Daily Blog Writer
+
+on:
+  schedule:
+    - cron: "30 1 * * *"   # 01:30 UTC = 07:00 AM IST
+  workflow_dispatch:        # allows manual Run workflow from the Actions tab
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Daily Blog Writer agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AGENT_ID: "agent_01H8H2ykHpPfs2CPtAuGHVJr"
+          ENV_ID: "env_01Hc1e52ZDms7VNPiDRYdw5q"
+        run: |
+          set -e
+
+          echo "Creating session..."
+          SESSION_RESPONSE=$(curl -s -X POST https://api.anthropic.com/v1/sessions \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "anthropic-beta: managed-agents-2026-04-01" \
+            -H "content-type: application/json" \
+            -d "{\"agent\":\"$AGENT_ID\",\"environment\":\"$ENV_ID\"}")
+
+          SESSION_ID=$(echo "$SESSION_RESPONSE" | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+
+          if [ -z "$SESSION_ID" ]; then
+            echo "Failed to create session. Response:"
+            echo "$SESSION_RESPONSE"
+            exit 1
+          fi
+          echo "Session created: $SESSION_ID"
+
+          echo "Sending trigger message..."
+          curl -s -X POST "https://api.anthropic.com/v1/sessions/$SESSION_ID/messages" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "anthropic-beta: managed-agents-2026-04-01" \
+            -H "content-type: application/json" \
+            -d "{\"events\":[{\"type\":\"user_message\",\"content\":\"execute\"}]}" > /dev/null
+
+          echo "Trigger sent. Waiting 30s before polling..."
+          sleep 30
+
+          echo "Polling for completion..."
+          LAST_COUNT=0
+          STABLE=0
+          for i in $(seq 1 60); do
+            STATUS_RESPONSE=$(curl -s "https://api.anthropic.com/v1/sessions/$SESSION_ID" \
+              -H "x-api-key: $ANTHROPIC_API_KEY" \
+              -H "anthropic-version: 2023-06-01" \
+              -H "anthropic-beta: managed-agents-2026-04-01")
+
+            STATUS=$(echo "$STATUS_RESPONSE" | grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+            COUNT=$(echo "$STATUS_RESPONSE" | grep -o '"type"' | wc -l)
+
+            echo "Poll $i: status=$STATUS, event_count=$COUNT"
+
+            if [ "$STATUS" = "idle" ] && [ "$COUNT" -gt 3 ] && [ "$COUNT" -eq "$LAST_COUNT" ]; then
+              STABLE=$((STABLE+1))
+              if [ "$STABLE" -ge 2 ]; then
+                echo "Agent run complete and stable. Done."
+                exit 0
+              fi
+            else
+              STABLE=0
+            fi
+
+            LAST_COUNT=$COUNT
+            sleep 30
+          done
+
+          echo "Polling finished after max iterations."
