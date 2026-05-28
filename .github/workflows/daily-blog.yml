@@ -25,31 +25,32 @@ jobs:
             -H "content-type: application/json" \
             -d "{\"agent\":\"$AGENT_ID\",\"environment_id\":\"$ENV_ID\"}")
 
-          echo "Raw session response:"
-          echo "$SESSION_RESPONSE"
-
           SESSION_ID=$(echo "$SESSION_RESPONSE" | jq -r '.id')
 
           if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "null" ]; then
-            echo "Failed to create session."
+            echo "Failed to create session. Response:"
+            echo "$SESSION_RESPONSE"
             exit 1
           fi
           echo "Session created: $SESSION_ID"
 
           echo "Sending trigger message..."
-          curl -s -X POST "https://api.anthropic.com/v1/sessions/$SESSION_ID/messages" \
+          TRIGGER_RESPONSE=$(curl -s -X POST "https://api.anthropic.com/v1/sessions/$SESSION_ID/messages" \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -H "anthropic-beta: managed-agents-2026-04-01" \
             -H "content-type: application/json" \
-            -d "{\"events\":[{\"type\":\"user_message\",\"content\":\"execute\"}]}" > /dev/null
+            -d "{\"events\":[{\"type\":\"user_message\",\"content\":\"execute\"}]}")
+          echo "Trigger response:"
+          echo "$TRIGGER_RESPONSE"
 
-          echo "Trigger sent. Waiting 30s before polling..."
-          sleep 30
+          echo "Trigger sent. Waiting 45s for the agent to start working..."
+          sleep 45
 
           echo "Polling for completion..."
           LAST_COUNT=0
           STABLE=0
+          WORKED=0
           for i in $(seq 1 40); do
             STATUS_RESPONSE=$(curl -s "https://api.anthropic.com/v1/sessions/$SESSION_ID" \
               -H "x-api-key: $ANTHROPIC_API_KEY" \
@@ -61,10 +62,16 @@ jobs:
 
             echo "Poll $i: status=$STATUS, event_count=$COUNT"
 
-            if [ "$STATUS" = "idle" ] && [ "$COUNT" -gt 3 ] && [ "$COUNT" = "$LAST_COUNT" ]; then
+            # Mark that real work has happened once the event count climbs well past the creation baseline
+            if [ "$COUNT" -gt 10 ]; then
+              WORKED=1
+            fi
+
+            # Only treat the run as complete after real work, idle status, and a stable count
+            if [ "$WORKED" -eq 1 ] && [ "$STATUS" = "idle" ] && [ "$COUNT" = "$LAST_COUNT" ]; then
               STABLE=$((STABLE+1))
-              if [ "$STABLE" -ge 2 ]; then
-                echo "Agent run complete and stable. Done."
+              if [ "$STABLE" -ge 3 ]; then
+                echo "Agent run complete and stable after real work. Done."
                 exit 0
               fi
             else
@@ -75,5 +82,5 @@ jobs:
             sleep 30
           done
 
-          echo "Polling reached max iterations; agent likely still finished writing. Check the Sheet."
+          echo "Polling reached max iterations. Check the Sheet and the session transcript."
           exit 0
