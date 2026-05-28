@@ -23,7 +23,7 @@ jobs:
             -H "anthropic-version: 2023-06-01" \
             -H "anthropic-beta: managed-agents-2026-04-01" \
             -H "content-type: application/json" \
-            -d "{\"agent\":\"$AGENT_ID\",\"environment\":\"$ENV_ID\"}")
+            -d "{\"agent\":\"$AGENT_ID\",\"environment_id\":\"$ENV_ID\"}")
 
           SESSION_ID=$(echo "$SESSION_RESPONSE" | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
 
