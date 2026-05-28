@@ -48,9 +48,8 @@ jobs:
           sleep 45
 
           echo "Polling for completion..."
-          LAST_COUNT=0
-          STABLE=0
-          WORKED=0
+          SAW_RUNNING=0
+          IDLE_STREAK=0
           for i in $(seq 1 40); do
             STATUS_RESPONSE=$(curl -s "https://api.anthropic.com/v1/sessions/$SESSION_ID" \
               -H "x-api-key: $ANTHROPIC_API_KEY" \
@@ -58,27 +57,23 @@ jobs:
               -H "anthropic-beta: managed-agents-2026-04-01")
 
             STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // empty')
-            COUNT=$(echo "$STATUS_RESPONSE" | jq '[.. | .type? // empty] | length')
+            echo "Poll $i: status=$STATUS"
 
-            echo "Poll $i: status=$STATUS, event_count=$COUNT"
-
-            if [ "$COUNT" -gt 10 ]; then
-              WORKED=1
-            fi
-
-            if [ "$WORKED" -eq 1 ] && [ "$STATUS" = "idle" ] && [ "$COUNT" = "$LAST_COUNT" ]; then
-              STABLE=$((STABLE+1))
-              if [ "$STABLE" -ge 3 ]; then
-                echo "Agent run complete and stable after real work. Done."
-                exit 0
+            if [ "$STATUS" = "running" ]; then
+              SAW_RUNNING=1
+              IDLE_STREAK=0
+            elif [ "$STATUS" = "idle" ]; then
+              if [ "$SAW_RUNNING" -eq 1 ]; then
+                IDLE_STREAK=$((IDLE_STREAK+1))
+                if [ "$IDLE_STREAK" -ge 2 ]; then
+                  echo "Agent ran and returned to idle. Run complete."
+                  exit 0
+                fi
               fi
-            else
-              STABLE=0
             fi
 
-            LAST_COUNT=$COUNT
             sleep 30
           done
 
-          echo "Polling reached max iterations. Check the Sheet and the session transcript."
+          echo "Polling reached max iterations. Check the Sheet and session transcript."
           exit 0
