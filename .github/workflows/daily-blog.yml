@@ -3,7 +3,7 @@ name: Daily Blog Writer
 on:
   schedule:
     - cron: "30 1 * * *"   # 01:30 UTC = 07:00 AM IST
-  workflow_dispatch:        # allows manual Run workflow from the Actions tab
+  workflow_dispatch:
 
 jobs:
   run-agent:
@@ -25,11 +25,13 @@ jobs:
             -H "content-type: application/json" \
             -d "{\"agent\":\"$AGENT_ID\",\"environment_id\":\"$ENV_ID\"}")
 
-          SESSION_ID=$(echo "$SESSION_RESPONSE" | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+          echo "Raw session response:"
+          echo "$SESSION_RESPONSE"
 
-          if [ -z "$SESSION_ID" ]; then
-            echo "Failed to create session. Response:"
-            echo "$SESSION_RESPONSE"
+          SESSION_ID=$(echo "$SESSION_RESPONSE" | jq -r '.id')
+
+          if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "null" ]; then
+            echo "Failed to create session."
             exit 1
           fi
           echo "Session created: $SESSION_ID"
@@ -48,18 +50,18 @@ jobs:
           echo "Polling for completion..."
           LAST_COUNT=0
           STABLE=0
-          for i in $(seq 1 60); do
+          for i in $(seq 1 40); do
             STATUS_RESPONSE=$(curl -s "https://api.anthropic.com/v1/sessions/$SESSION_ID" \
               -H "x-api-key: $ANTHROPIC_API_KEY" \
               -H "anthropic-version: 2023-06-01" \
               -H "anthropic-beta: managed-agents-2026-04-01")
 
-            STATUS=$(echo "$STATUS_RESPONSE" | grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
-            COUNT=$(echo "$STATUS_RESPONSE" | grep -o '"type"' | wc -l)
+            STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // empty')
+            COUNT=$(echo "$STATUS_RESPONSE" | jq '[.. | .type? // empty] | length')
 
             echo "Poll $i: status=$STATUS, event_count=$COUNT"
 
-            if [ "$STATUS" = "idle" ] && [ "$COUNT" -gt 3 ] && [ "$COUNT" -eq "$LAST_COUNT" ]; then
+            if [ "$STATUS" = "idle" ] && [ "$COUNT" -gt 3 ] && [ "$COUNT" = "$LAST_COUNT" ]; then
               STABLE=$((STABLE+1))
               if [ "$STABLE" -ge 2 ]; then
                 echo "Agent run complete and stable. Done."
@@ -73,4 +75,5 @@ jobs:
             sleep 30
           done
 
-          echo "Polling finished after max iterations."
+          echo "Polling reached max iterations; agent likely still finished writing. Check the Sheet."
+          exit 0
